@@ -24,7 +24,11 @@ def load_model():
 
 landmark_buffer = deque(maxlen=15)
 
-model, le, N_FEATURES = load_model()
+try:
+    model, le, N_FEATURES = load_model()
+except Exception as e:
+    st.error(f"Model failed to load: {e}")
+    st.stop()
 
 mp_hands = mp.solutions.hands
 mp_draw  = mp.solutions.drawing_utils
