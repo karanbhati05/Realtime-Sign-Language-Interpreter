@@ -90,6 +90,11 @@ def extract_features_from_buffer(frames_list):
 # Session state
 if "sentence"   not in st.session_state: st.session_state.sentence   = []
 if "last_added" not in st.session_state: st.session_state.last_added = ""
+if "landmark_buffer" not in st.session_state: st.session_state.landmark_buffer = deque(maxlen=15)
+if "hold_buffer" not in st.session_state: st.session_state.hold_buffer = deque(maxlen=20)
+if "live_label" not in st.session_state: st.session_state.live_label = ""
+if "live_confidence" not in st.session_state: st.session_state.live_confidence = 0.0
+if "live_top3" not in st.session_state: st.session_state.live_top3 = []
 
 # UI
 st.markdown("## Real-time sign language interpreter")
@@ -133,105 +138,114 @@ with col_ctrl:
     top3_box = st.empty()
 
 with col_vid:
-    run          = st.checkbox("Start webcam", value=False)
+    run          = st.checkbox("Start camera", value=False)
     frame_window = st.empty()
 
-buffer      = deque(maxlen=hold_frames)
+if st.session_state.hold_buffer.maxlen != hold_frames:
+    st.session_state.hold_buffer = deque(list(st.session_state.hold_buffer), maxlen=hold_frames)
+
 if run:
-    hands_det = mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=1,
-        min_detection_confidence=0.7,
-        min_tracking_confidence=0.6,
-    )
+    camera_frame = st.camera_input("Capture sign frame")
+    if camera_frame is not None:
+        bytes_data = camera_frame.getvalue()
+        np_arr = np.frombuffer(bytes_data, np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        frame = cv2.flip(frame, 1)
 
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        st.warning("Webcam is not available on this server.")
-        st.info("If you are on Streamlit Cloud, run this app locally for live webcam mode.")
-        run = False
+        hands_det = mp_hands.Hands(
+            static_image_mode=True,
+            max_num_hands=1,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.6,
+        )
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = hands_det.process(rgb)
+        hands_det.close()
 
-while run:
-    ret, frame = cap.read()
-    if not ret:
-        st.error("Cannot access webcam.")
-        break
+        label = ""
+        confidence = 0.0
+        top3 = []
 
-    frame   = cv2.flip(frame, 1)
-    rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands_det.process(rgb)
+        if results.multi_hand_landmarks:
+            hand_lm = results.multi_hand_landmarks[0]
+            mp_draw.draw_landmarks(
+                frame,
+                hand_lm,
+                mp_hands.HAND_CONNECTIONS,
+                mp_style.get_default_hand_landmarks_style(),
+                mp_style.get_default_hand_connections_style(),
+            )
 
-    label      = ""
-    confidence = 0.0
-    top3       = []
+            lm_raw = np.array([[p.x, p.y, p.z] for p in hand_lm.landmark]).flatten()
+            st.session_state.landmark_buffer.append(lm_raw)
 
-    if results.multi_hand_landmarks:
-        hand_lm = results.multi_hand_landmarks[0]
-        mp_draw.draw_landmarks(
+            if len(st.session_state.landmark_buffer) == 15:
+                feats = extract_features_from_buffer(list(st.session_state.landmark_buffer))
+                if len(feats) == N_FEATURES:
+                    proba = model.predict_proba([feats])[0]
+                    top_idx = proba.argmax()
+                    confidence = proba[top_idx]
+                    label = le.classes_[top_idx]
+                    top3_idx = proba.argsort()[-3:][::-1]
+                    top3 = [(le.classes_[i], proba[i]) for i in top3_idx]
+
+                    st.session_state.hold_buffer.append(label)
+                    if (
+                        confidence >= conf_thresh
+                        and len(st.session_state.hold_buffer) == hold_frames
+                        and len(set(st.session_state.hold_buffer)) == 1
+                        and label != st.session_state.last_added
+                    ):
+                        st.session_state.sentence.append(label)
+                        st.session_state.last_added = label
+                        if voice_on and speak_mode == "Each word":
+                            speak(label)
+        else:
+            st.session_state.hold_buffer.clear()
+            st.session_state.landmark_buffer.clear()
+
+        st.session_state.live_label = label
+        st.session_state.live_confidence = confidence
+        st.session_state.live_top3 = top3
+
+        color = (0, 200, 100) if confidence >= conf_thresh else (0, 140, 255)
+        cv2.rectangle(frame, (10, 50), (240, 70), (40, 40, 40), -1)
+        cv2.rectangle(frame, (10, 50), (10 + int(confidence * 230), 70), color, -1)
+        cv2.putText(
             frame,
-            hand_lm,
-            mp_hands.HAND_CONNECTIONS,
-            mp_style.get_default_hand_landmarks_style(),
-            mp_style.get_default_hand_connections_style(),
+            f"{label}  {confidence*100:.0f}%",
+            (10, 44),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            color,
+            2,
         )
 
-        # Add raw landmarks to buffer
-        lm_raw = np.array([[p.x, p.y, p.z] for p in hand_lm.landmark]).flatten()  # 63
-        landmark_buffer.append(lm_raw)
+        filled = sum(1 for x in st.session_state.hold_buffer if x == label) if label else 0
+        cv2.rectangle(frame, (10, 76), (240, 88), (40, 40, 40), -1)
+        if hold_frames > 0:
+            cv2.rectangle(
+                frame,
+                (10, 76),
+                (10 + int(filled / hold_frames * 230), 88),
+                (255, 200, 0),
+                -1,
+            )
 
-        # Only predict once buffer is full
-        if len(landmark_buffer) == 15:
-            feats = extract_features_from_buffer(list(landmark_buffer))
-
-            if len(feats) == N_FEATURES:
-                proba      = model.predict_proba([feats])[0]
-                top_idx    = proba.argmax()
-                confidence = proba[top_idx]
-                label      = le.classes_[top_idx]
-
-                top3_idx = proba.argsort()[-3:][::-1]
-                top3     = [(le.classes_[i], proba[i]) for i in top3_idx]
-
-                buffer.append(label)
-
-                if (confidence >= conf_thresh
-                        and len(buffer) == hold_frames
-                        and len(set(buffer)) == 1
-                        and label != st.session_state.last_added):
-                    st.session_state.sentence.append(label)
-                    st.session_state.last_added = label
-                    if voice_on and speak_mode == "Each word":
-                        speak(label)
+        frame_window.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width="stretch")
     else:
-        buffer.clear()
-        landmark_buffer.clear()
+        st.info("Use the camera capture button to provide frames for prediction.")
 
-    # Overlay on frame
-    color = (0, 200, 100) if confidence >= conf_thresh else (0, 140, 255)
-    cv2.rectangle(frame, (10,50), (240,70), (40,40,40), -1)
-    cv2.rectangle(frame, (10,50), (10+int(confidence*230),70), color, -1)
-    cv2.putText(frame, f"{label}  {confidence*100:.0f}%",
-                (10,44), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
+sent = " ".join(st.session_state.sentence)
+sentence_box.markdown(f"### {sent}" if sent else "*Start signing...*")
+label = st.session_state.live_label
+confidence = st.session_state.live_confidence
+top3 = st.session_state.live_top3
+pred_box.markdown(f"**`{label}`**" if label else "*No hand detected*")
+conf_bar.progress(float(round(confidence, 2)), text=f"Confidence: {confidence*100:.0f}%")
 
-    # Buffer progress
-    filled = sum(1 for x in buffer if x == label) if label else 0
-    cv2.rectangle(frame, (10,76), (240,88), (40,40,40), -1)
-    if hold_frames > 0:
-        cv2.rectangle(frame, (10,76), (10+int(filled/hold_frames*230),88), (255,200,0), -1)
-
-    frame_window.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width='stretch')
-
-    sent = " ".join(st.session_state.sentence)
-    sentence_box.markdown(f"### {sent}" if sent else "*Start signing...*")
-    pred_box.markdown(f"**`{label}`**" if label else "*No hand detected*")
-    conf_bar.progress(float(round(confidence,2)), text=f"Confidence: {confidence*100:.0f}%")
-
-    if top3:
-        top3_box.markdown("\n".join([
-            f"**{i+1}.** `{sign}` — {prob*100:.0f}%"
-            for i,(sign,prob) in enumerate(top3)
-        ]))
-
-if run:
-    cap.release()
-    hands_det.close()
+if top3:
+    top3_box.markdown("\n".join([
+        f"**{i+1}.** `{sign}` — {prob*100:.0f}%"
+        for i, (sign, prob) in enumerate(top3)
+    ]))
