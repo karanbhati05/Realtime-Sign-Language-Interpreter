@@ -1,5 +1,7 @@
 import streamlit as st
 import cv2
+import os
+os.environ.setdefault("MEDIAPIPE_DISABLE_GPU", "1")
 import mediapipe as mp
 import joblib
 import numpy as np
@@ -135,16 +137,19 @@ with col_vid:
     frame_window = st.empty()
 
 buffer      = deque(maxlen=hold_frames)
-prev_lm     = None
+if run:
+    hands_det = mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=1,
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.6,
+    )
 
-hands_det = mp_hands.Hands(
-    static_image_mode=False,
-    max_num_hands=1,
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.6
-)
-
-cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        st.warning("Webcam is not available on this server.")
+        st.info("If you are on Streamlit Cloud, run this app locally for live webcam mode.")
+        run = False
 
 while run:
     ret, frame = cap.read()
@@ -227,5 +232,6 @@ while run:
             for i,(sign,prob) in enumerate(top3)
         ]))
 
-cap.release()
-hands_det.close()
+if run:
+    cap.release()
+    hands_det.close()
