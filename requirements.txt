@@ -1,4 +1,4 @@
-mediapipe
+mediapipe==0.10.9
 opencv-python-headless
 scikit-learn
 pandas
