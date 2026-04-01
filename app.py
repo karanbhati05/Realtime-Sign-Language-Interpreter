@@ -3,6 +3,7 @@ import cv2
 import mediapipe as mp
 import joblib
 import numpy as np
+import platform
 from collections import deque
 from ensemble import EnsembleModel
 import queue
@@ -31,15 +32,21 @@ mp_style = mp.solutions.drawing_styles
 
 def speak(text):
     import subprocess
-    subprocess.Popen(
-        ['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', '-Command',
-         f'Add-Type -AssemblyName System.Speech; '
-         f'$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; '
-         f'$s.Rate = 1; '
-         f'$s.Speak("{text}")'],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
+    if platform.system() != "Windows":
+        return
+    try:
+        subprocess.Popen(
+            ['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', '-Command',
+             f'Add-Type -AssemblyName System.Speech; '
+             f'$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; '
+             f'$s.Rate = 1; '
+             f'$s.Speak("{text}")'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        # Ignore TTS errors so cloud deployment keeps running.
+        pass
 
 # Feature engineering — must match train_model.py exactly
 fingertips    = [4, 8, 12, 16, 20]
