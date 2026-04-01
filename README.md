@@ -3,11 +3,9 @@ title: Realtime Sign Language Interpreter
 emoji: "🖐️"
 colorFrom: blue
 colorTo: green
-sdk: streamlit
-sdk_version: 1.56.0
-app_file: app.py
+sdk: docker
+app_port: 7860
 pinned: false
-python_version: 3.11
 ---
 
 # Realtime Sign Language Interpreter
