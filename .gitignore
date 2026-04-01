@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.python-version
+.env
+.env.*
+.streamlit/secrets.toml
+.DS_Store
+Thumbs.db
+dataset.csv
+sign_model.pkl
